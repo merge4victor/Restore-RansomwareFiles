@@ -62,7 +62,9 @@ namespace RansomwareRecovery
                 int error = Marshal.GetLastWin32Error();
                 if (error != ErrorMoreData)
                 {
-                    throw new Win32Exception(error, "FSCTL_SRV_ENUMERATE_SNAPSHOTS failed");
+                    throw new Win32Exception(error, string.Format(
+                        "FSCTL_SRV_ENUMERATE_SNAPSHOTS failed with error {0}: {1}",
+                        error, new Win32Exception(error).Message));
                 }
             }
             return buffer;
