@@ -1,0 +1,10 @@
+# Run output
+RansomwareRecovery_*.csv
+testResults.xml
+OldLogs/
+
+# Binaries the legacy scripts used; not redistributable / not needed
+volrest.exe
+LongPath/
+*.dll
+*.pdb
