@@ -13,20 +13,33 @@ namespace RansomwareRecovery
         private const uint FileShareAll = 0x00000007;
         private const uint OpenExisting = 3;
         private const uint FileFlagBackupSemantics = 0x02000000;
-        private const int ErrorMoreData = 234;
+        private const int StatusBufferOverflow = unchecked((int)0x80000005);
 
         // SRV_SNAPSHOT_ARRAY: three ULONGs followed by a multi-string of @GMT tokens.
         private const int HeaderSize = 12;
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct IoStatusBlock
+        {
+            public IntPtr Status;
+            public UIntPtr Information;
+        }
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern SafeFileHandle CreateFileW(
             string fileName, uint desiredAccess, uint shareMode, IntPtr securityAttributes,
             uint creationDisposition, uint flagsAndAttributes, IntPtr templateFile);
 
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern bool DeviceIoControl(
-            SafeFileHandle device, uint ioControlCode, IntPtr inBuffer, uint inBufferSize,
-            byte[] outBuffer, uint outBufferSize, out uint bytesReturned, IntPtr overlapped);
+        // DeviceIoControl only issues IRP_MJ_FILE_SYSTEM_CONTROL for FILE_DEVICE_FILE_SYSTEM
+        // codes; this FSCTL uses FILE_DEVICE_NETWORK_FILE_SYSTEM, so call ntdll directly.
+        [DllImport("ntdll.dll")]
+        private static extern int NtFsControlFile(
+            SafeFileHandle fileHandle, IntPtr eventHandle, IntPtr apcRoutine, IntPtr apcContext,
+            out IoStatusBlock ioStatusBlock, uint fsControlCode, IntPtr inputBuffer, uint inputBufferLength,
+            byte[] outputBuffer, uint outputBufferLength);
+
+        [DllImport("ntdll.dll")]
+        private static extern int RtlNtStatusToDosError(int status);
 
         public static string[] GetTokens(string shareRoot)
         {
@@ -55,17 +68,15 @@ namespace RansomwareRecovery
         private static byte[] Query(SafeFileHandle handle, uint size)
         {
             byte[] buffer = new byte[size];
-            uint bytesReturned;
-            if (!DeviceIoControl(handle, FsctlSrvEnumerateSnapshots, IntPtr.Zero, 0, buffer, size,
-                out bytesReturned, IntPtr.Zero))
+            IoStatusBlock ioStatus;
+            int status = NtFsControlFile(handle, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, out ioStatus,
+                FsctlSrvEnumerateSnapshots, IntPtr.Zero, 0, buffer, size);
+            if (status < 0 && status != StatusBufferOverflow)
             {
-                int error = Marshal.GetLastWin32Error();
-                if (error != ErrorMoreData)
-                {
-                    throw new Win32Exception(error, string.Format(
-                        "FSCTL_SRV_ENUMERATE_SNAPSHOTS failed with error {0}: {1}",
-                        error, new Win32Exception(error).Message));
-                }
+                int error = RtlNtStatusToDosError(status);
+                throw new Win32Exception(error, string.Format(
+                    "FSCTL_SRV_ENUMERATE_SNAPSHOTS failed with NTSTATUS 0x{0:X8}: {1}",
+                    status, new Win32Exception(error).Message));
             }
             return buffer;
         }
